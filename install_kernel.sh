@@ -706,20 +706,29 @@ function enableBBRSysctlConfig(){
         currentQueueText="fq"
     fi
 
-    echo "net.core.default_qdisc=${currentQueueText}" >> /etc/sysctl.conf
-	echo "net.ipv4.tcp_congestion_control=${currentBBRText}" >> /etc/sysctl.conf
-    echo "net.ipv4.tcp_ecn=${currentECNValue}" >> /etc/sysctl.conf
-
-    isSysctlText=$(sysctl -p 2>&1 | grep "No such file")
+    # systemd-sysctl on Debian 13 does not read /etc/sysctl.conf at boot.
+    if ! mkdir -p /etc/sysctl.d || ! cat > /etc/sysctl.d/99-one-click-bbr.conf <<-EOF
+net.core.default_qdisc=${currentQueueText}
+net.ipv4.tcp_congestion_control=${currentBBRText}
+net.ipv4.tcp_ecn=${currentECNValue}
+EOF
+    then
+        red " 无法写入 BBR 配置文件 /etc/sysctl.d/99-one-click-bbr.conf "
+        return 1
+    fi
 
     echo
-    if [[ -z "$isSysctlText" ]]; then
-		green " 已成功开启 ${currentBBRText} + ${currentQueueText} ${currentECNText} "
-	else
-        green " 已成功开启 ${currentBBRText} ${currentECNText}"
-        red " 但当前内核版本过低, 开启队列算法 ${currentQueueText} 失败! "
-        red "请重新运行脚本, 选择'2 开启 BBR 加速'后, 务必再选择 (1)FQ 队列算法 !"
+    if ! sysctl -p /etc/sysctl.d/99-one-click-bbr.conf; then
+        red " BBR 配置应用失败，请检查上方错误信息和内核支持情况。配置文件已保留。 "
+        return 1
     fi
+    if [[ $(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null) != "${currentBBRText}" ]] ||
+       [[ $(sysctl -n net.core.default_qdisc 2>/dev/null) != "${currentQueueText}" ]] ||
+       [[ $(sysctl -n net.ipv4.tcp_ecn 2>/dev/null) != "${currentECNValue}" ]]; then
+        red " BBR 配置未完全生效，请检查当前 sysctl 参数和内核支持情况。配置文件已保留。 "
+        return 1
+    fi
+    green " 已成功开启 ${currentBBRText} + ${currentQueueText} ${currentECNText} "
     echo
 
 
@@ -740,6 +749,7 @@ function enableBBRSysctlConfig(){
 
 # 卸载 bbr+锐速 配置
 function removeBbrSysctlConfig(){
+    rm -f /etc/sysctl.d/99-one-click-bbr.conf
     sed -i '/net.core.default_qdisc/d' /etc/sysctl.conf
     sed -i '/net.ipv4.tcp_congestion_control/d' /etc/sysctl.conf
 
